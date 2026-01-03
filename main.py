@@ -1,47 +1,78 @@
 #!/usr/bin/env python3
 
 import blowfish
-from os import listdir, path
 from pathlib import Path
+import argparse
+import zipfile
 
-base_dir = 'D:\SBReforged'
+BLOWFISH_KEY = b'\x85\x71\x40\x3C\x14\x50\x0B\x52\x73\x2D\x10\x08\x63\x59\x5B\xAA'
+BLOWFISH_IV_LEN = 8
+BLOWFISH_CIPHER = blowfish.Cipher(BLOWFISH_KEY)
 
+def unzip(src_file, dest_dir):
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(src_file, 'r') as zip_file:
+        zip_file.extractall(dest_dir)
 
-key = b'\x85\x71\x40\x3C\x14\x50\x0B\x52\x73\x2D\x10\x08\x63\x59\x5B\xAA'
-cipher = blowfish.Cipher(key)
+def decrypt_dir(dir):
+    for file in dir.iterdir():
+        if file.suffix == '.zip' or file.suffix == '.txt':
+            print(f'File "{file}" is a zip or txt file')
+            continue
 
-def decrypt_dir(src_dir, dest_dir):
-    for file in listdir(src_dir):
-        if Path(file).suffix != '.zip' and Path(file).suffix != '.txt':
-            file = path.join(src_dir, file)
-            plaintext = decrypt_file(file)
+        plaintext = decrypt_file(file)
+        with open(file, 'w', encoding='utf-8') as f:
+            f.write(plaintext)
+        print(f'Unpacked: "{file}"')
 
-            with open(f'{dest_dir}\{path.basename(file)}', 'w') as decrypted:
-                decrypted.write(plaintext)
-
-def decrypt_file(file):
-    with open(file, 'rb') as encrypted:
+def decrypt_file(filepath):
+    with open(filepath, 'rb') as encrypted:
         ciphertext = encrypted.read()
-        iv = ciphertext[:8]
 
-        plaintext = b''.join(cipher.decrypt_cfb(ciphertext[8:], iv))
+        # Decrypt first 8-bytes with zero IV
+        first_block = b''.join(BLOWFISH_CIPHER.decrypt_cfb(
+            ciphertext[:BLOWFISH_IV_LEN],
+            b'\x00' * BLOWFISH_IV_LEN
+        ))
+
+        # Decrypt remainder using first 8 bytes of ciphertext as IV
+        remainder = b''.join(BLOWFISH_CIPHER.decrypt_cfb(
+            ciphertext[BLOWFISH_IV_LEN:],
+            ciphertext[:BLOWFISH_IV_LEN]
+        ))
+
         try:
-            print(plaintext.decode())
-        except:
-             print(f'Failed to decode file: {file}')
+            return (first_block + remainder).decode('utf-8')
+        except UnicodeDecodeError:
+            print(f'Failed to decrypt "{filepath}"')
+            return ''
 
-def encrypt_file(file):
-    with open(file, 'r') as decrypted:
-        plaintext = decrypted.read()
-        iv = b'\x25\x7A\x86\x0C\x9D\xE0\x53\x70'
+def main():
+    parser = argparse.ArgumentParser(
+        description='Decrypt WPAK files associated with the game Shadowbane'
+    )
+    parser.add_argument(
+        'filepath',
+        type=str,
+        help='Filepath of the WPAK file to unpack'
+    )
+    parser.add_argument(
+        '-o',
+        '--output_dir',
+        type=str,
+        default=None,
+        help='Optional output directory. Defaults to same directory as WPAK file if not specified.'
+    )
+    args = parser.parse_args()
 
-        ciphertext = b''.join(cipher.encrypt_cfb(plaintext.encode(), iv))
-        with open('test/Emotes-test.cfg', 'wb') as emotes:
-            emotes.write(ciphertext)
+    wpak_file = Path(args.filepath)
+    if args.output_dir:
+        out_dir = Path(args.output_dir)
+    else:
+        out_dir = wpak_file.with_suffix('')
 
+    unzip(wpak_file, out_dir)
+    decrypt_dir(out_dir)
 
-#decrypt_file('D:\SBReforged\Config\_Config.wpak.extracted\XPCredits.cfg')
-#decrypt_dir(f'{base_dir}\Config\_Transitions.wpak.extracted', 'D:\Documents\Projects\sb-wpak-extractor\Decrypted\Config\Transitions')
-
-encrypt_file('test/Emotes.cfg')
-#decrypt_file('test/Emotes-test.cfg')
+if __name__ == "__main__":
+    main()
